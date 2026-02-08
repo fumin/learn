@@ -1,4 +1,4 @@
-package learn
+package bqc
 
 import (
 	"flag"
