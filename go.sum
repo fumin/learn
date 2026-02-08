@@ -1,7 +1,7 @@
 github.com/fumin/diffeq v0.0.0-20251016135217-f3c146fcaba4 h1:SgHWwtiL1rw9+8UKXTA1hTdroRJ/62272f41S3iosRY=
 github.com/fumin/diffeq v0.0.0-20251016135217-f3c146fcaba4/go.mod h1:iSlGP3I2NWFfUroRmPs/fD5god0CiUAjqYWrWNt0fBM=
-github.com/fumin/tensor v0.0.0-20260105101349-861340c1d459 h1:LG8CxdYL5LzHRASm/3lCIOQUEPXRbWqqdfHVD8QwUDc=
-github.com/fumin/tensor v0.0.0-20260105101349-861340c1d459/go.mod h1:kPIu4TDISF+RWs6FGoBG5pDAXXPMAAuIt6sw/8rvRA4=
+github.com/fumin/tensor v0.0.0-20260209024632-93bd67122165 h1:zD+ns+exY5Oevk+buODh4Hp9sU7skCpRZQE+O3d/icE=
+github.com/fumin/tensor v0.0.0-20260209024632-93bd67122165/go.mod h1:a7IoZ6ERXbMbRaqliDUbKQa/QoxJZa9XqCLqxumqycU=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 golang.org/x/tools v0.30.0 h1:BgcpHewrV5AUp2G9MebG4XPFI1E2W41zU1SaqVA9vJY=
