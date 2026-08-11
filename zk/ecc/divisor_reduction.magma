@@ -1,0 +1,58 @@
+// Example of a reduction of a divisor on an Elliptic curve.
+// Base on Example 3.2.1 in Pairings for beginners by Craig Costello
+// https://www.craigcostello.com.au/tutorials
+//
+// Run this in the Magma online calculator:
+// https://magma.maths.usyd.edu.au/calc/
+
+q := 41;
+Fq1 := GF(q);
+divisorPoints1 := [
+    19, 8,
+    4, 36,
+    18, 39,
+    22, 38,
+    32, 6,
+];
+
+Fq3 := GF(q^3);
+divisorPoints3 := [
+    2*Fq3.1^2 + 23*Fq3.1 + 14, 30*Fq3.1^2 + 13*Fq3.1 + 5,
+    7*Fq3.1^2 + 16*Fq3.1 + 31, 33*Fq3.1^2 + 4*Fq3.1 + 7,
+    32*Fq3.1^2 + 2*Fq3.1 + 34, 19*Fq3.1^2 + 24*Fq3.1 + 25,
+];
+
+primePower := 1;
+if primePower eq 1 then
+    Fq := Fq1;
+    divisorPoints := divisorPoints1;
+else
+    Fq := Fq3;
+    divisorPoints := divisorPoints3;
+end if;
+
+a:=17; b:=16;
+E:=EllipticCurve([Fq|a,b]);
+print E;
+F<x,y>:=FunctionField(E);
+O:=PointsAtInfinity(E)[1];
+
+numPoints := #divisorPoints div 2;
+xcoords:=[];
+ycoords:=[];
+D:=Divisor(O)-Divisor(O);
+for i:=1 to numPoints do
+        Pi:=E![divisorPoints[(i-1)*2+1], divisorPoints[(i-1)*2+1+1], 1];
+	xcoords:=Append(xcoords,Pi[1]);
+	ycoords:=Append(ycoords,Pi[2]);
+	D:=D+Divisor(Pi)-Divisor(O);
+end for;
+
+l:=y-Evaluate(Interpolation(xcoords,ycoords),x);
+print "The y-coordinate of the Mumford representation of the divisor:";
+print "    ", l;
+Support(Divisor(l));
+
+Dd:=Divisor(l)-D;
+Support(Dd); // Divisors not necessarily defined over Fq
+
