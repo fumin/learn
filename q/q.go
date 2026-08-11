@@ -35,7 +35,7 @@ func (b Braket) String() string {
 }
 
 type Axis struct {
-	System interface{}
+	System any
 	Braket Braket
 }
 
@@ -63,7 +63,7 @@ func (a *Dense) Equal(b *Dense, tol float32) error {
 }
 
 func (a *Dense) String() string {
-	var d interface{}
+	var d any
 	m := ToMat(a)
 	switch {
 	case len(m.Axis) == 1:
@@ -222,11 +222,11 @@ func Exp(a *Dense) *Dense {
 	return &Dense{Axis: bAxis, D: eA}
 }
 
-func PartialDot(a0 *Dense, args ...interface{}) *Dense {
+func PartialDot(a0 *Dense, args ...any) *Dense {
 	if len(args)%2 != 0 {
 		panic(fmt.Sprintf("len(args) not even number %d", len(args)))
 	}
-	systems := make([]interface{}, 0, len(args)/2)
+	systems := make([]any, 0, len(args)/2)
 	as := make([]*Dense, 0, len(args)/2)
 	for i, arg := range args {
 		if i%2 == 0 {
@@ -268,7 +268,7 @@ func PartialDot(a0 *Dense, args ...interface{}) *Dense {
 
 func Dot(as ...*Dense) *Dense {
 	a0 := as[0]
-	args := make([]interface{}, 0, 2*len(as)-1)
+	args := make([]any, 0, 2*len(as)-1)
 	for _, a := range as[1:] {
 		args = append(args, nil)
 		args = append(args, a)
@@ -291,7 +291,7 @@ func A𐌈(as ...*Dense) *Dense {
 	return buf0
 }
 
-func Sys(a *Dense, s interface{}) *Dense {
+func Sys(a *Dense, s any) *Dense {
 	b := &Dense{Axis: make([]Axis, len(a.Axis)), D: a.D}
 	copy(b.Axis, a.Axis)
 	for i := range b.Axis {
@@ -300,7 +300,7 @@ func Sys(a *Dense, s interface{}) *Dense {
 	return b
 }
 
-func SysReplace(a *Dense, oldS, newS interface{}) *Dense {
+func SysReplace(a *Dense, oldS, newS any) *Dense {
 	b := &Dense{Axis: make([]Axis, len(a.Axis)), D: a.D}
 	copy(b.Axis, a.Axis)
 	for i, ax := range b.Axis {
@@ -349,13 +349,13 @@ func invPerm(p []int) []int {
 }
 
 func toMatAxes(a *Dense) []int {
-	systems := make([]interface{}, 0, len(a.Axis)/2)
+	systems := make([]any, 0, len(a.Axis)/2)
 	for _, ax := range a.Axis {
 		if ax.Braket == Ket {
 			systems = append(systems, ax.System)
 		}
 	}
-	compare := func(a, b interface{}) int {
+	compare := func(a, b any) int {
 		ai := slices.Index(systems, a)
 		bi := slices.Index(systems, b)
 		return cmp.Compare(ai, bi)

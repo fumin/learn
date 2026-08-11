@@ -16,6 +16,7 @@ var (
 func 𐌈(as ...*q.Dense) *q.Dense  { return q.A𐌈(as...) }
 func sqrt(x complex64) complex64 { return complex64(cmplx.Sqrt(complex128(x))) }
 
+// QCLec book is https://www.scottaaronson.com/qclec.pdf
 func TestQCLec28_9_258(t *testing.T) {
 	s000 := 𐌈(q.Z0, q.Sys(q.Z0, 2), q.Sys(q.Z0, 3))
 	s111 := 𐌈(q.Z1, q.Sys(q.Z1, 2), q.Sys(q.Z1, 3))

@@ -73,7 +73,7 @@ func (b Braket) String() string {
 }
 
 type Axis struct {
-	System interface{}
+	System any
 	Braket Braket
 }
 
@@ -231,8 +231,8 @@ func Exp(a *Dense) *Dense {
 	return &Dense{Axis: bAxis, D: eA}
 }
 
-func pdot(a0 *Dense, args ...interface{}) *Dense {
-	systems := make([]interface{}, 0, len(args)/2)
+func pdot(a0 *Dense, args ...any) *Dense {
+	systems := make([]any, 0, len(args)/2)
 	as := make([]*Dense, 0, len(args)/2)
 	for i, arg := range args {
 		if i%2 == 0 {
@@ -272,7 +272,7 @@ func pdot(a0 *Dense, args ...interface{}) *Dense {
 
 func dot(as ...*Dense) *Dense {
 	a0 := as[0]
-	args := make([]interface{}, 0, 2*len(as)-1)
+	args := make([]any, 0, 2*len(as)-1)
 	for _, a := range as[1:] {
 		args = append(args, nil)
 		args = append(args, a)
@@ -295,7 +295,7 @@ func 𐌈(as ...*Dense) *Dense {
 	return buf0
 }
 
-func sys(a *Dense, s interface{}) *Dense {
+func sys(a *Dense, s any) *Dense {
 	b := &Dense{Axis: make([]Axis, len(a.Axis)), D: a.D}
 	copy(b.Axis, a.Axis)
 	for i := range b.Axis {
@@ -304,7 +304,7 @@ func sys(a *Dense, s interface{}) *Dense {
 	return b
 }
 
-func sysReplace(a *Dense, oldS, newS interface{}) *Dense {
+func sysReplace(a *Dense, oldS, newS any) *Dense {
 	b := &Dense{Axis: make([]Axis, len(a.Axis)), D: a.D}
 	copy(b.Axis, a.Axis)
 	for i, ax := range b.Axis {
@@ -316,13 +316,13 @@ func sysReplace(a *Dense, oldS, newS interface{}) *Dense {
 }
 
 func toMatAxes(a *Dense) []int {
-	systems := make([]interface{}, 0, len(a.Axis)/2)
+	systems := make([]any, 0, len(a.Axis)/2)
 	for _, ax := range a.Axis {
 		if ax.Braket == Ket {
 			systems = append(systems, ax.System)
 		}
 	}
-	compare := func(a, b interface{}) int {
+	compare := func(a, b any) int {
 		ai := slices.Index(systems, a)
 		bi := slices.Index(systems, b)
 		return cmp.Compare(ai, bi)
