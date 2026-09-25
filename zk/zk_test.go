@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -34,6 +35,34 @@ import (
 	"github.com/pkg/errors"
 )
 
+func TestRS4_11(t *testing.T) {
+	twos := func(n int) []*big.Int { return getPowers(big.NewInt(2), n) }
+	tests := []struct {
+		b  []*big.Int
+		al []*big.Int
+		v  *big.Int
+		ok bool
+	}{
+		{b: twos(4), al: bigs(1, 1, 1, 0), v: big.NewInt(7), ok: true},
+		{b: twos(4), al: bigs(-1, 0, 0, 1), v: big.NewInt(7), ok: false},
+		{b: twos(4), al: bigs(7, 0, 0, 0), v: big.NewInt(7), ok: false},
+		{b: twos(4), al: bigs(1, 0, 1, 0), v: big.NewInt(7), ok: false},
+		// Subset sum.
+		{b: bigs(3, 5, 7, 11), v: big.NewInt(16), al: bigs(0, 1, 0, 1), ok: true},
+		{b: bigs(3, 5, 7, 11), v: big.NewInt(16), al: bigs(1, 1, 0, 1), ok: false},
+		{b: bigs(3, 5, 7, 11), v: big.NewInt(16), al: bigs(0, -1, 3, 0), ok: false},
+	}
+	for i, test := range tests {
+		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+			basis := newBulletProofBasis(len(test.b))
+			proof := rangeProve(test.al, test.v, test.b, basis)
+			if ok := rangeProofVerify(proof, test.b, basis); ok != test.ok {
+				t.Errorf("%v want %v", ok, test.ok)
+			}
+		})
+	}
+}
+
 func TestRS4_8(t *testing.T) {
 	tests := []struct {
 		a []int
@@ -48,11 +77,11 @@ func TestRS4_8(t *testing.T) {
 		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
 			a, b := bigs(test.a...), bigs(test.b...)
 			basis := newBulletProofBasis(len(a))
-			proverSecret := newBulletProverSecret(basis)
+			proverSecret := newBulletProverSecret(len(basis.g))
 			commitment := bulletProofCommit(a, b, basis, proverSecret)
 
-			proof := bulletProve(a, b, commitment, basis, proverSecret)
-			if !bulletProofVerify(proof, commitment, basis) {
+			proof := bulletProve(a, b, len(a), commitment, basis, proverSecret)
+			if !bulletProofVerify(proof, len(a), commitment, basis) {
 				t.Errorf("should verify")
 			}
 
@@ -61,8 +90,8 @@ func TestRS4_8(t *testing.T) {
 				badA[i] = new(big.Int).Set(a[i])
 			}
 			badA[0].SetInt64(98765)
-			badProof := bulletProve(badA, b, commitment, basis, proverSecret)
-			if bulletProofVerify(badProof, commitment, basis) {
+			badProof := bulletProve(badA, b, len(a), commitment, basis, proverSecret)
+			if bulletProofVerify(badProof, len(a), commitment, basis) {
 				t.Errorf("should not verify")
 			}
 		})
@@ -102,7 +131,6 @@ func TestRS4_8_FrozenHeart(t *testing.T) {
 	cmV := new(bn254.G1Affine).Set(tuq)
 	cmV.Add(cmV, tmp.ScalarMultiplication(basis.b, fakeProof.pit))
 	fakeCommitment := bulletProofCommitment{
-		n:  len(a),
 		a:  cmA,
 		s:  inf,
 		v:  cmV,
@@ -110,10 +138,10 @@ func TestRS4_8_FrozenHeart(t *testing.T) {
 		t2: inf,
 	}
 
-	if !bulletProofVerifyFrozenHeart(fakeProof, fakeCommitment, basis) {
+	if !bulletProofVerifyFrozenHeart(fakeProof, len(a), fakeCommitment, basis) {
 		t.Errorf("should verify")
 	}
-	if bulletProofVerify(fakeProof, fakeCommitment, basis) {
+	if bulletProofVerify(fakeProof, len(a), fakeCommitment, basis) {
 		t.Errorf("should not verify")
 	}
 }
@@ -855,6 +883,296 @@ func TestMain(m *testing.M) {
 	m.Run()
 }
 
+type rangeProof struct {
+	a  *bn254.G1Affine
+	s  *bn254.G1Affine
+	v  *bn254.G1Affine
+	t1 *bn254.G1Affine
+	t2 *bn254.G1Affine
+
+	tu   *big.Int
+	pilr *big.Int
+	pit  *big.Int
+
+	c   *bn254.G1Affine
+	ipp InnerProductProof
+}
+
+func rangeProve(al []*big.Int, v *big.Int, b []*big.Int, basis bulletProofBasis) rangeProof {
+	one := big.NewInt(1)
+	ar := make([]*big.Int, len(al))
+	for i := range ar {
+		ar[i] = new(big.Int).Sub(al[i], one)
+	}
+	secret := newBulletProverSecret(len(basis.g))
+	proof := rangeProof{
+		a:    new(bn254.G1Affine).SetInfinity(),
+		s:    new(bn254.G1Affine).SetInfinity(),
+		v:    new(bn254.G1Affine).SetInfinity(),
+		t1:   new(bn254.G1Affine).SetInfinity(),
+		t2:   new(bn254.G1Affine).SetInfinity(),
+		tu:   big.NewInt(0),
+		pilr: big.NewInt(0),
+		pit:  big.NewInt(0),
+		c:    new(bn254.G1Affine).SetInfinity(),
+	}
+
+	// Compute A.
+	tmp, tmpi := new(bn254.G1Affine), new(big.Int)
+	for i := range al {
+		proof.a.Add(proof.a, tmp.ScalarMultiplication(basis.g[i], al[i]))
+	}
+	for i := range al {
+		proof.a.Add(proof.a, tmp.ScalarMultiplication(basis.h[i], ar[i]))
+	}
+	proof.a.Add(proof.a, tmp.ScalarMultiplication(basis.b, secret.alpha))
+	// Compute S.
+	for i := range secret.sl {
+		proof.s.Add(proof.s, tmp.ScalarMultiplication(basis.g[i], secret.sl[i]))
+	}
+	for i := range secret.sr {
+		proof.s.Add(proof.s, tmp.ScalarMultiplication(basis.h[i], secret.sr[i]))
+	}
+	proof.s.Add(proof.s, tmp.ScalarMultiplication(basis.b, secret.beta))
+	// Compute V.
+	proof.v.Add(proof.v, tmp.ScalarMultiplication(basis.q, v))
+	proof.v.Add(proof.v, tmp.ScalarMultiplication(basis.b, secret.gamma))
+
+	// Verifier sends prover challenge y, z.
+	mod := bn254.ID.ScalarField()
+	var transcript Transcript
+	transcript.Write("a", proof.a.Marshal())
+	transcript.Write("s", proof.s.Marshal())
+	transcript.Write("v", proof.v.Marshal())
+	y := new(big.Int).SetBytes(transcript.Read("y"))
+	z := new(big.Int).SetBytes(transcript.Read("z"))
+	if zeroChallenge(y) || zeroChallenge(z) {
+		return rangeProof{}
+	}
+	yn := getPowers(y, len(al))
+	hyn := make([]*bn254.G1Affine, len(yn))
+	for i := range hyn {
+		hyn[i] = new(bn254.G1Affine).ScalarMultiplication(basis.h[i], tmpi.ModInverse(yn[i], mod))
+	}
+	z2 := new(big.Int).Mul(z, z)
+	z2.Mod(z2, mod)
+
+	// Compute t(x) = t0 + t1*x + t2*x^2.
+	// Compute t0.
+	left, right := new(big.Int), new(big.Int)
+	t0 := big.NewInt(0)
+	for i := range al {
+		left.Sub(al[i], z)
+		right.Mul(yn[i], ar[i])
+		right.Add(right, tmpi.Mul(yn[i], z))
+		right.Add(right, tmpi.Mul(z2, b[i]))
+		t0.Add(t0, tmpi.Mul(left, right))
+		t0.Mod(t0, mod)
+	}
+	// Compute t1.
+	t1 := big.NewInt(0)
+	for i := range al {
+		left.Sub(al[i], z)
+		right.Mul(yn[i], secret.sr[i])
+		t1.Add(t1, tmpi.Mul(left, right))
+		t1.Mod(t1, mod)
+	}
+	for i := range ar {
+		left.Mul(yn[i], ar[i])
+		left.Add(left, tmpi.Mul(yn[i], z))
+		left.Add(left, tmpi.Mul(z2, b[i]))
+		t1.Add(t1, tmpi.Mul(left, secret.sl[i]))
+		t1.Mod(t1, mod)
+	}
+	// Compute t2.
+	t2 := big.NewInt(0)
+	for i := range secret.sl {
+		right.Mul(yn[i], secret.sr[i])
+		t2.Add(t2, tmpi.Mul(secret.sl[i], right))
+		t2.Mod(t2, mod)
+	}
+	proof.t1.Add(proof.t1, tmp.ScalarMultiplication(basis.q, t1))
+	proof.t1.Add(proof.t1, tmp.ScalarMultiplication(basis.b, secret.tau1))
+	proof.t2.Add(proof.t2, tmp.ScalarMultiplication(basis.q, t2))
+	proof.t2.Add(proof.t2, tmp.ScalarMultiplication(basis.b, secret.tau2))
+
+	// Verifier send prover challenge u.
+	transcript.Write("t1", proof.t1.Marshal())
+	transcript.Write("t2", proof.t2.Marshal())
+	u := new(big.Int).SetBytes(transcript.Read("u"))
+	if zeroChallenge(u) {
+		return rangeProof{}
+	}
+
+	// Compute l(u).
+	lu := make([]*big.Int, len(al))
+	for i := range lu {
+		lu[i] = new(big.Int).Sub(al[i], z)
+		lu[i].Add(lu[i], tmpi.Mul(secret.sl[i], u))
+		lu[i].Mod(lu[i], mod)
+	}
+	// Compute r(u).
+	ru := make([]*big.Int, len(ar))
+	for i := range ru {
+		ru[i] = new(big.Int).Mul(yn[i], ar[i])
+		ru[i].Add(ru[i], tmpi.Mul(yn[i], z))
+		ru[i].Add(ru[i], tmpi.Mul(z2, b[i]))
+		tmpi.Mul(yn[i], secret.sr[i])
+		tmpi.Mul(tmpi, u)
+		ru[i].Add(ru[i], tmpi)
+		ru[i].Mod(ru[i], mod)
+	}
+	// Compute t(u).
+	proof.tu.Add(proof.tu, t0)
+	proof.tu.Add(proof.tu, tmpi.Mul(t1, u))
+	tmpi.Mul(t2, u)
+	tmpi.Mul(tmpi, u)
+	proof.tu.Add(proof.tu, tmpi)
+	// Modulo all finite field elements to prevent an attacker from
+	// recovering our leaked values.
+	proof.tu.Mod(proof.tu, mod)
+	// Compute π_lr.
+	proof.pilr.Add(secret.alpha, tmpi.Mul(secret.beta, u))
+	proof.pilr.Mod(proof.pilr, mod)
+	// Compute π_t.
+	proof.pit.Add(proof.pit, tmpi.Mul(z2, secret.gamma))
+	proof.pit.Add(proof.pit, tmpi.Mul(secret.tau1, u))
+	tmpi.Mul(secret.tau2, u)
+	tmpi.Mul(tmpi, u)
+	proof.pit.Add(proof.pit, tmpi)
+	proof.pit.Mod(proof.pit, mod)
+
+	for i := range lu {
+		proof.c.Add(proof.c, tmp.ScalarMultiplication(basis.g[i], lu[i]))
+	}
+	for i := range ru {
+		proof.c.Add(proof.c, tmp.ScalarMultiplication(hyn[i], ru[i]))
+	}
+	// Create the inner product proof.
+	transcript.Write("c", proof.c.Marshal())
+	w := new(big.Int).SetBytes(transcript.Read("w"))
+	if zeroChallenge(w) {
+		return rangeProof{}
+	}
+	q := new(bn254.G1Affine).ScalarMultiplication(basis.q, w)
+	proof.ipp, transcript = proveCommitmentsLog(basis.g, hyn, q, lu, ru, transcript)
+
+	return proof
+}
+
+func rangeProofVerify(proof rangeProof, b []*big.Int, basis bulletProofBasis) bool {
+	// Make sure points are valid, otherwise forged proofs will be accepted.
+	if !(validPoint(proof.a) && validPoint(proof.s) && validPoint(proof.v) && validPoint(proof.t1) && validPoint(proof.t2) && validPoint(proof.c)) {
+		return false
+	}
+	// Fix proof malleability by checking field elements.
+	if !(validScalar(proof.tu) && validScalar(proof.pilr) && validScalar(proof.pit)) {
+		return false
+	}
+	mod := bn254.ID.ScalarField()
+
+	// Verifier sends prover challenge y, z.
+	var transcript Transcript
+	transcript.Write("a", proof.a.Marshal())
+	transcript.Write("s", proof.s.Marshal())
+	transcript.Write("v", proof.v.Marshal())
+	y := new(big.Int).SetBytes(transcript.Read("y"))
+	z := new(big.Int).SetBytes(transcript.Read("z"))
+	if zeroChallenge(y) || zeroChallenge(z) {
+		return false
+	}
+	yn := getPowers(y, len(b))
+	z2 := new(big.Int).Mul(z, z)
+	z2.Mod(z2, mod)
+
+	// Compute H_y^(-1)
+	tmp, tmpi := new(bn254.G1Affine), new(big.Int)
+	hyn := make([]*bn254.G1Affine, len(yn))
+	for i := range hyn {
+		hyn[i] = new(bn254.G1Affine).ScalarMultiplication(basis.h[i], tmpi.ModInverse(yn[i], mod))
+	}
+	// Compute δ(y,z) = (z - z^2)*<1,y^n> - z^3*<1,b>.
+	delta := new(big.Int).Sub(z, z2)
+	tmpi.SetInt64(0)
+	for i := range yn {
+		tmpi.Add(tmpi, yn[i])
+	}
+	delta.Mul(delta, tmpi)
+	tmpi.SetInt64(0)
+	for i := range b {
+		tmpi.Add(tmpi, b[i])
+	}
+	tmpi.Mul(tmpi, z)
+	tmpi.Mul(tmpi, z2)
+	delta.Sub(delta, tmpi)
+	delta.Mod(delta, mod)
+
+	// Verifier send prover challenge u.
+	transcript.Write("t1", proof.t1.Marshal())
+	transcript.Write("t2", proof.t2.Marshal())
+	u := new(big.Int).SetBytes(transcript.Read("u"))
+	if zeroChallenge(u) {
+		return false
+	}
+	// Verifier send prover challenge w.
+	transcript.Write("c", proof.c.Marshal())
+	w := new(big.Int).SetBytes(transcript.Read("w"))
+	if zeroChallenge(w) {
+		return false
+	}
+	q := new(bn254.G1Affine).ScalarMultiplication(basis.q, w)
+
+	// Check that both:
+	// 	C + tu*Q = <lu,G> + <ru,Hy-1> + <lu,ru>*Q
+	// 	tu = <lu,ru>
+	ctuq := new(bn254.G1Affine).ScalarMultiplication(q, proof.tu)
+	ctuq.Add(ctuq, proof.c)
+	if !verifyCommitmentsLog(proof.ipp, len(b), ctuq, basis.g, hyn, q, transcript) {
+		return false
+	}
+
+	// Check that C = A + u*S + ...
+	rhs := new(bn254.G1Affine).Set(proof.a)
+	rhs.Add(rhs, tmp.ScalarMultiplication(proof.s, u))
+	nz := tmpi.Sub(tmpi.SetInt64(0), z)
+	for i := range b {
+		rhs.Add(rhs, tmp.ScalarMultiplication(basis.g[i], nz))
+	}
+	z2b := new(big.Int)
+	for i := range hyn {
+		tmpi.Mul(z, yn[i])
+		tmpi.Add(tmpi, z2b.Mul(z2, b[i]))
+		rhs.Add(rhs, tmp.ScalarMultiplication(hyn[i], tmpi))
+	}
+	tmpi.Sub(tmpi.SetInt64(0), proof.pilr)
+	rhs.Add(rhs, tmp.ScalarMultiplication(basis.b, tmpi))
+	if !proof.c.Equal(rhs) {
+		return false
+	}
+
+	// Check tu*Q = z^2*V + ...
+	tuq := ctuq.ScalarMultiplication(basis.q, proof.tu)
+	rhs.ScalarMultiplication(proof.v, z2)
+	rhs.Add(rhs, tmp.ScalarMultiplication(basis.q, delta))
+	rhs.Add(rhs, tmp.ScalarMultiplication(proof.t1, u))
+	rhs.Add(rhs, tmp.ScalarMultiplication(proof.t2, tmpi.Mul(u, u)))
+	tmpi.Sub(tmpi.SetInt64(0), proof.pit)
+	rhs.Add(rhs, tmp.ScalarMultiplication(basis.b, tmpi))
+	if !tuq.Equal(rhs) {
+		return false
+	}
+
+	return true
+}
+
+func getPowers(base *big.Int, n int) []*big.Int {
+	b := make([]*big.Int, n)
+	for i := range b {
+		b[i] = new(big.Int).Exp(base, big.NewInt(int64(i)), bn254.ID.ScalarField())
+	}
+	return b
+}
+
 type bulletProof struct {
 	c    *bn254.G1Affine
 	tu   *big.Int
@@ -863,9 +1181,9 @@ type bulletProof struct {
 	ipp  InnerProductProof
 }
 
-func bulletProve(a, b []*big.Int, cm bulletProofCommitment, basis bulletProofBasis, secret bulletProverSecret) bulletProof {
+func bulletProve(a, b []*big.Int, n int, cm bulletProofCommitment, basis bulletProofBasis, secret bulletProverSecret) bulletProof {
 	var transcript Transcript
-	transcript.Write("n", binary.BigEndian.AppendUint64(nil, uint64(cm.n)))
+	transcript.Write("n", binary.BigEndian.AppendUint64(nil, uint64(n)))
 	transcript.Write("a", cm.a.Marshal())
 	transcript.Write("s", cm.s.Marshal())
 	transcript.Write("v", cm.v.Marshal())
@@ -873,6 +1191,9 @@ func bulletProve(a, b []*big.Int, cm bulletProofCommitment, basis bulletProofBas
 	transcript.Write("t2", cm.t2.Marshal())
 
 	u := new(big.Int).SetBytes(transcript.Read("u"))
+	if zeroChallenge(u) {
+		return bulletProof{}
+	}
 
 	proof := bulletProof{
 		c:    new(bn254.G1Affine).SetInfinity(),
@@ -909,16 +1230,22 @@ func bulletProve(a, b []*big.Int, cm bulletProofCommitment, basis bulletProofBas
 	v.Mul(v, u)
 	v.Mul(v, u)
 	proof.tu.Add(proof.tu, v)
+	// Modulo all finite field elements to prevent an attacker from
+	// recovering our leaked values.
+	mod := bn254.ID.ScalarField()
+	proof.tu.Mod(proof.tu, mod)
 
 	// Compute π_lr
 	proof.pilr.Add(proof.pilr, secret.alpha)
 	proof.pilr.Add(proof.pilr, tmpi.Mul(secret.beta, u))
+	proof.pilr.Mod(proof.pilr, mod)
 
 	// Compute π_t
 	proof.pit.Add(proof.pit, secret.gamma)
 	proof.pit.Add(proof.pit, tmpi.Mul(secret.tau1, u))
 	tmpi.Mul(secret.tau2, u)
 	proof.pit.Add(proof.pit, tmpi.Mul(tmpi, u))
+	proof.pit.Mod(proof.pit, mod)
 
 	// Compute c = lu*g + lr*h, which is a commitment to the vectors
 	// l(x) and r(x) evaluated at u:
@@ -945,15 +1272,30 @@ func bulletProve(a, b []*big.Int, cm bulletProofCommitment, basis bulletProofBas
 	// Create the inner product proof.
 	transcript.Write("c", proof.c.Marshal())
 	w := new(big.Int).SetBytes(transcript.Read("w"))
+	if zeroChallenge(w) {
+		return bulletProof{}
+	}
 	q := new(bn254.G1Affine).ScalarMultiplication(basis.q, w)
 	proof.ipp, transcript = proveCommitmentsLog(basis.g, basis.h, q, lu, ru, transcript)
 
 	return proof
 }
 
-func bulletProofVerify(proof bulletProof, cm bulletProofCommitment, basis bulletProofBasis) bool {
+func bulletProofVerify(proof bulletProof, n int, cm bulletProofCommitment, basis bulletProofBasis) bool {
+	// Make sure points are valid, otherwise forged proofs will be accepted.
+	if !(validPoint(cm.a) && validPoint(cm.s) && validPoint(cm.v) && validPoint(cm.t1) && validPoint(cm.t2)) {
+		return false
+	}
+	if !validPoint(proof.c) {
+		return false
+	}
+	// Fix proof malleability by checking field elements.
+	if !(validScalar(proof.tu) && validScalar(proof.pilr) && validScalar(proof.pit)) {
+		return false
+	}
+
 	var transcript Transcript
-	transcript.Write("n", binary.BigEndian.AppendUint64(nil, uint64(cm.n)))
+	transcript.Write("n", binary.BigEndian.AppendUint64(nil, uint64(n)))
 	transcript.Write("a", cm.a.Marshal())
 	transcript.Write("s", cm.s.Marshal())
 	transcript.Write("v", cm.v.Marshal())
@@ -961,6 +1303,9 @@ func bulletProofVerify(proof bulletProof, cm bulletProofCommitment, basis bullet
 	transcript.Write("t2", cm.t2.Marshal())
 
 	u := new(big.Int).SetBytes(transcript.Read("u"))
+	if zeroChallenge(u) {
+		return false
+	}
 
 	// Make q unpredictable to prevent fake proofs where t(u) != l(u)*r(u).
 	//
@@ -981,11 +1326,14 @@ func bulletProofVerify(proof bulletProof, cm bulletProofCommitment, basis bullet
 	// Also, see https://github.com/zkcrypto/bulletproofs/blob/2bc6cb73f718dd2406d70d3c55f0fb85a87a4a8f/src/range_proof.rs#L243
 	transcript.Write("c", proof.c.Marshal())
 	w := new(big.Int).SetBytes(transcript.Read("w"))
+	if zeroChallenge(w) {
+		return false
+	}
 	q := new(bn254.G1Affine).ScalarMultiplication(basis.q, w)
 
 	ctuq := new(bn254.G1Affine).ScalarMultiplication(q, proof.tu)
 	ctuq.Add(ctuq, proof.c)
-	if !verifyCommitmentsLog(proof.ipp, cm.n, ctuq, basis.g, basis.h, q, transcript) {
+	if !verifyCommitmentsLog(proof.ipp, n, ctuq, basis.g, basis.h, q, transcript) {
 		return false
 	}
 
@@ -1014,7 +1362,7 @@ func bulletProofVerify(proof bulletProof, cm bulletProofCommitment, basis bullet
 	return true
 }
 
-func bulletProofVerifyFrozenHeart(proof bulletProof, cm bulletProofCommitment, basis bulletProofBasis) bool {
+func bulletProofVerifyFrozenHeart(proof bulletProof, n int, cm bulletProofCommitment, basis bulletProofBasis) bool {
 	// This variant of bulletProofVerify is susceptible to the frozen heart
 	// vulnerability, since it does not add cm to transcript.
 	var transcript Transcript
@@ -1022,7 +1370,7 @@ func bulletProofVerifyFrozenHeart(proof bulletProof, cm bulletProofCommitment, b
 
 	ctuq := new(bn254.G1Affine).ScalarMultiplication(basis.q, proof.tu)
 	ctuq.Add(ctuq, proof.c)
-	if !verifyCommitmentsLog(proof.ipp, cm.n, ctuq, basis.g, basis.h, basis.q, transcript) {
+	if !verifyCommitmentsLog(proof.ipp, n, ctuq, basis.g, basis.h, basis.q, transcript) {
 		return false
 	}
 
@@ -1052,7 +1400,6 @@ func bulletProofVerifyFrozenHeart(proof bulletProof, cm bulletProofCommitment, b
 }
 
 type bulletProofCommitment struct {
-	n  int
 	a  *bn254.G1Affine
 	s  *bn254.G1Affine
 	v  *bn254.G1Affine
@@ -1062,7 +1409,6 @@ type bulletProofCommitment struct {
 
 func bulletProofCommit(a, b []*big.Int, basis bulletProofBasis, secret bulletProverSecret) bulletProofCommitment {
 	cm := bulletProofCommitment{
-		n:  len(a),
 		a:  new(bn254.G1Affine).SetInfinity(),
 		s:  new(bn254.G1Affine).SetInfinity(),
 		v:  new(bn254.G1Affine).SetInfinity(),
@@ -1139,15 +1485,15 @@ type bulletProverSecret struct {
 	sr    []*big.Int
 }
 
-func newBulletProverSecret(basis bulletProofBasis) bulletProverSecret {
+func newBulletProverSecret(n int) bulletProverSecret {
 	var s bulletProverSecret
 	s.alpha, _ = rand.Int(rand.Reader, bn254.ID.ScalarField())
 	s.beta, _ = rand.Int(rand.Reader, bn254.ID.ScalarField())
 	s.gamma, _ = rand.Int(rand.Reader, bn254.ID.ScalarField())
 	s.tau1, _ = rand.Int(rand.Reader, bn254.ID.ScalarField())
 	s.tau2, _ = rand.Int(rand.Reader, bn254.ID.ScalarField())
-	s.sl = randInts(bn254.ID.ScalarField(), len(basis.g))
-	s.sr = randInts(bn254.ID.ScalarField(), len(basis.h))
+	s.sl = randInts(bn254.ID.ScalarField(), n)
+	s.sr = randInts(bn254.ID.ScalarField(), n)
 	return s
 }
 
@@ -1176,6 +1522,7 @@ type InnerProductProof struct {
 }
 
 func proveCommitmentsLog(g, h []*bn254.G1Affine, q *bn254.G1Affine, a, b []*big.Int, transcript Transcript) (InnerProductProof, Transcript) {
+	mod := bn254.ID.ScalarField()
 	proof := InnerProductProof{
 		L:     make([]*bn254.G1Affine, 0),
 		R:     make([]*bn254.G1Affine, 0),
@@ -1214,8 +1561,10 @@ func proveCommitmentsLog(g, h []*bn254.G1Affine, q *bn254.G1Affine, a, b []*big.
 
 		// Fiat Shamir Transform.
 		u.SetBytes(transcript.Read("u"))
+		if uInv.ModInverse(u, mod) == nil {
+			return InnerProductProof{}, nil
+		}
 
-		uInv.ModInverse(u, bn254.ID.ScalarField())
 		gP = foldG(gP, uInv)
 		hP = foldG(hP, u)
 		aP = fold(aP, u)
@@ -1224,14 +1573,33 @@ func proveCommitmentsLog(g, h []*bn254.G1Affine, q *bn254.G1Affine, a, b []*big.
 
 	proof.lastA.Set(aP[0])
 	proof.lastB.Set(bP[0])
+	// Modulo all finite field elements to prevent an attacker from
+	// recovering our leaked values.
+	proof.lastA.Mod(proof.lastA, mod)
+	proof.lastB.Mod(proof.lastB, mod)
 	return proof, transcript
 }
 
 func verifyCommitmentsLog(proof InnerProductProof, n int, p *bn254.G1Affine, g, h []*bn254.G1Affine, q *bn254.G1Affine, transcript Transcript) bool {
-	if (1 << len(proof.L)) != n {
+	// Make sure points are valid, otherwise forged proofs will be accepted.
+	if len(proof.L) != len(proof.R) {
+		return false
+	}
+	for i := range proof.L {
+		if !validPoint(proof.L[i]) || !validPoint(proof.R[i]) {
+			return false
+		}
+	}
+	if !(validScalar(proof.lastA) && validScalar(proof.lastB)) {
 		return false
 	}
 
+	// Check folded proof size.
+	if l := len(proof.L); !((l < bits.UintSize-1) && ((1 << l) == n)) {
+		return false
+	}
+
+	mod := bn254.ID.ScalarField()
 	u, uInv, tmp, tmpi := new(big.Int), new(big.Int), new(bn254.G1Affine), new(big.Int)
 	pPNew := new(bn254.G1Affine)
 
@@ -1248,16 +1616,23 @@ func verifyCommitmentsLog(proof InnerProductProof, n int, p *bn254.G1Affine, g, 
 		transcript.Write(fmt.Sprintf("r%d", i), r.Marshal())
 
 		u.SetBytes(transcript.Read("u"))
+		if uInv.ModInverse(u, mod) == nil {
+			return false
+		}
 
 		tmpi.Mul(u, u)
 		pPNew.ScalarMultiplication(l, tmpi)
 		pPNew.Add(pPNew, pP)
-		tmpi.ModInverse(tmpi, bn254.ID.ScalarField())
+		if tmpi.ModInverse(tmpi, mod) == nil {
+			return false
+		}
 		pP.Add(pPNew, tmp.ScalarMultiplication(r, tmpi))
 
-		uInv.ModInverse(u, bn254.ID.ScalarField())
 		gP = foldG(gP, uInv)
 		hP = foldG(hP, u)
+	}
+	if len(gP) != 1 || len(hP) != 1 {
+		return false
 	}
 
 	rhs := new(bn254.G1Affine).ScalarMultiplication(gP[0], proof.lastA)
@@ -1272,6 +1647,7 @@ func verifyCommitmentsLogFrozenHeart(proof InnerProductProof, n int, p *bn254.G1
 		return false
 	}
 
+	mod := bn254.ID.ScalarField()
 	u, uInv, tmp, tmpi := new(big.Int), new(big.Int), new(bn254.G1Affine), new(big.Int)
 	pPNew := new(bn254.G1Affine)
 
@@ -1288,14 +1664,18 @@ func verifyCommitmentsLogFrozenHeart(proof InnerProductProof, n int, p *bn254.G1
 		transcript.Write(fmt.Sprintf("r%d", i), r.Marshal())
 
 		u.SetBytes(transcript.Read("u"))
+		if uInv.ModInverse(u, mod) == nil {
+			return false
+		}
 
 		tmpi.Mul(u, u)
 		pPNew.ScalarMultiplication(l, tmpi)
 		pPNew.Add(pPNew, pP)
-		tmpi.ModInverse(tmpi, bn254.ID.ScalarField())
+		if tmpi.ModInverse(tmpi, mod) == nil {
+			return false
+		}
 		pP.Add(pPNew, tmp.ScalarMultiplication(r, tmpi))
 
-		uInv.ModInverse(u, bn254.ID.ScalarField())
 		gP = foldG(gP, uInv)
 		hP = foldG(hP, u)
 	}
@@ -1313,14 +1693,35 @@ func verifyCommitmentsLogFrozenHeart(proof InnerProductProof, n int, p *bn254.G1
 type Transcript []byte
 
 func (t *Transcript) Read(label string) []byte {
-	*t = append(*t, []byte(label)...)
+	*t = append(*t, 'r')
+	*t = binary.BigEndian.AppendUint64(*t, uint64(len(label)))
+	*t = append(*t, label...)
 	h := sha256.Sum256(*t)
 	return h[:]
 }
 
 func (t *Transcript) Write(label string, data []byte) {
-	*t = append(*t, []byte(label)...)
+	*t = append(*t, 'w')
+	*t = binary.BigEndian.AppendUint64(*t, uint64(len(label)))
+	*t = append(*t, label...)
+	*t = binary.BigEndian.AppendUint64(*t, uint64(len(data)))
 	*t = append(*t, data...)
+}
+
+// zeroChallenge reports whether a Fiat Shamir challenge read from our SHA256
+// transcript is the zero element of the scalar field. There are six multiples
+// of bn254's modulo that fit below 2^256, so the probability of such an
+// occurance is 2^(-253).
+func zeroChallenge(c *big.Int) bool {
+	return new(big.Int).Mod(c, bn254.ID.ScalarField()).Sign() == 0
+}
+
+func validPoint(p *bn254.G1Affine) bool {
+	return p != nil && p.IsOnCurve()
+}
+
+func validScalar(s *big.Int) bool {
+	return s != nil && s.Sign() >= 0 && s.Cmp(bn254.ID.ScalarField()) < 0
 }
 
 func calcOffDiagonal(g, h []*bn254.G1Affine, q *bn254.G1Affine, a, b []*big.Int) (*bn254.G1Affine, *bn254.G1Affine) {
