@@ -34,6 +34,42 @@ import (
 	"github.com/pkg/errors"
 )
 
+func TestRS4_11(t *testing.T) {
+	tests := []struct {
+		n  int
+		v  int
+		al []int
+		ok bool
+	}{
+		{n: 5, v: 7, al: []int{1, 1, 1, 0, 0}, ok: true},
+		// {n: 5, v: 7, al: []int{-1, 0, 0, 1, 0}, ok: false},
+		// {n: 5, v: 7, al: []int{7, 0, 0, 0, 0}, ok: false},
+		// {n: 5, v: 7, al: []int{1, 0, 1, 0, 0}, ok: false},
+	}
+	for i, test := range tests {
+		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+			proof := rangeProve(test.n, test.v, test.al)
+			if v := rangeProofVerify(proof, test.n); v != test.ok {
+				t.Errorf("%v want %v", v, test.ok)
+			}
+		})
+	}
+}
+
+type rangeProof struct {
+}
+
+func rangeProve(n, v int, ali []int) rangeProof {
+	al := bigs(ali...)
+	log.Printf("%v", al)
+	proof := rangeProof{}
+	return proof
+}
+
+func rangeProofVerify(proof rangeProof, n int) bool {
+	return false
+}
+
 func TestRS4_8(t *testing.T) {
 	tests := []struct {
 		a []int
@@ -51,8 +87,8 @@ func TestRS4_8(t *testing.T) {
 			proverSecret := newBulletProverSecret(basis)
 			commitment := bulletProofCommit(a, b, basis, proverSecret)
 
-			proof := bulletProve(a, b, commitment, basis, proverSecret)
-			if !bulletProofVerify(proof, commitment, basis) {
+			proof := bulletProve(a, b, len(a), commitment, basis, proverSecret)
+			if !bulletProofVerify(proof, len(a), commitment, basis) {
 				t.Errorf("should verify")
 			}
 
@@ -61,8 +97,8 @@ func TestRS4_8(t *testing.T) {
 				badA[i] = new(big.Int).Set(a[i])
 			}
 			badA[0].SetInt64(98765)
-			badProof := bulletProve(badA, b, commitment, basis, proverSecret)
-			if bulletProofVerify(badProof, commitment, basis) {
+			badProof := bulletProve(badA, b, len(a), commitment, basis, proverSecret)
+			if bulletProofVerify(badProof, len(a), commitment, basis) {
 				t.Errorf("should not verify")
 			}
 		})
@@ -102,7 +138,6 @@ func TestRS4_8_FrozenHeart(t *testing.T) {
 	cmV := new(bn254.G1Affine).Set(tuq)
 	cmV.Add(cmV, tmp.ScalarMultiplication(basis.b, fakeProof.pit))
 	fakeCommitment := bulletProofCommitment{
-		n:  len(a),
 		a:  cmA,
 		s:  inf,
 		v:  cmV,
@@ -110,10 +145,10 @@ func TestRS4_8_FrozenHeart(t *testing.T) {
 		t2: inf,
 	}
 
-	if !bulletProofVerifyFrozenHeart(fakeProof, fakeCommitment, basis) {
+	if !bulletProofVerifyFrozenHeart(fakeProof, len(a), fakeCommitment, basis) {
 		t.Errorf("should verify")
 	}
-	if bulletProofVerify(fakeProof, fakeCommitment, basis) {
+	if bulletProofVerify(fakeProof, len(a), fakeCommitment, basis) {
 		t.Errorf("should not verify")
 	}
 }
@@ -863,9 +898,9 @@ type bulletProof struct {
 	ipp  InnerProductProof
 }
 
-func bulletProve(a, b []*big.Int, cm bulletProofCommitment, basis bulletProofBasis, secret bulletProverSecret) bulletProof {
+func bulletProve(a, b []*big.Int, n int, cm bulletProofCommitment, basis bulletProofBasis, secret bulletProverSecret) bulletProof {
 	var transcript Transcript
-	transcript.Write("n", binary.BigEndian.AppendUint64(nil, uint64(cm.n)))
+	transcript.Write("n", binary.BigEndian.AppendUint64(nil, uint64(n)))
 	transcript.Write("a", cm.a.Marshal())
 	transcript.Write("s", cm.s.Marshal())
 	transcript.Write("v", cm.v.Marshal())
@@ -951,9 +986,9 @@ func bulletProve(a, b []*big.Int, cm bulletProofCommitment, basis bulletProofBas
 	return proof
 }
 
-func bulletProofVerify(proof bulletProof, cm bulletProofCommitment, basis bulletProofBasis) bool {
+func bulletProofVerify(proof bulletProof, n int, cm bulletProofCommitment, basis bulletProofBasis) bool {
 	var transcript Transcript
-	transcript.Write("n", binary.BigEndian.AppendUint64(nil, uint64(cm.n)))
+	transcript.Write("n", binary.BigEndian.AppendUint64(nil, uint64(n)))
 	transcript.Write("a", cm.a.Marshal())
 	transcript.Write("s", cm.s.Marshal())
 	transcript.Write("v", cm.v.Marshal())
@@ -985,7 +1020,7 @@ func bulletProofVerify(proof bulletProof, cm bulletProofCommitment, basis bullet
 
 	ctuq := new(bn254.G1Affine).ScalarMultiplication(q, proof.tu)
 	ctuq.Add(ctuq, proof.c)
-	if !verifyCommitmentsLog(proof.ipp, cm.n, ctuq, basis.g, basis.h, q, transcript) {
+	if !verifyCommitmentsLog(proof.ipp, n, ctuq, basis.g, basis.h, q, transcript) {
 		return false
 	}
 
@@ -1014,7 +1049,7 @@ func bulletProofVerify(proof bulletProof, cm bulletProofCommitment, basis bullet
 	return true
 }
 
-func bulletProofVerifyFrozenHeart(proof bulletProof, cm bulletProofCommitment, basis bulletProofBasis) bool {
+func bulletProofVerifyFrozenHeart(proof bulletProof, n int, cm bulletProofCommitment, basis bulletProofBasis) bool {
 	// This variant of bulletProofVerify is susceptible to the frozen heart
 	// vulnerability, since it does not add cm to transcript.
 	var transcript Transcript
@@ -1022,7 +1057,7 @@ func bulletProofVerifyFrozenHeart(proof bulletProof, cm bulletProofCommitment, b
 
 	ctuq := new(bn254.G1Affine).ScalarMultiplication(basis.q, proof.tu)
 	ctuq.Add(ctuq, proof.c)
-	if !verifyCommitmentsLog(proof.ipp, cm.n, ctuq, basis.g, basis.h, basis.q, transcript) {
+	if !verifyCommitmentsLog(proof.ipp, n, ctuq, basis.g, basis.h, basis.q, transcript) {
 		return false
 	}
 
@@ -1052,7 +1087,6 @@ func bulletProofVerifyFrozenHeart(proof bulletProof, cm bulletProofCommitment, b
 }
 
 type bulletProofCommitment struct {
-	n  int
 	a  *bn254.G1Affine
 	s  *bn254.G1Affine
 	v  *bn254.G1Affine
@@ -1062,7 +1096,6 @@ type bulletProofCommitment struct {
 
 func bulletProofCommit(a, b []*big.Int, basis bulletProofBasis, secret bulletProverSecret) bulletProofCommitment {
 	cm := bulletProofCommitment{
-		n:  len(a),
 		a:  new(bn254.G1Affine).SetInfinity(),
 		s:  new(bn254.G1Affine).SetInfinity(),
 		v:  new(bn254.G1Affine).SetInfinity(),
