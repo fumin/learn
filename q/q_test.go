@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"slices"
 	"testing"
 
@@ -94,6 +95,49 @@ func TestInvPerm(t *testing.T) {
 			p = invPerm(test.invp)
 			if !slices.Equal(p, test.p) {
 				t.Errorf("%v %v", p, test.p)
+			}
+		})
+	}
+}
+
+func TestFromMat(t *testing.T) {
+	const s = 1 / math.Sqrt2
+	h := T2([][]complex64{{s, s}, {s, -s}})
+	cnot := A𐌈(Z0, Z0.H(), Sys(One, 2)).Add(1, A𐌈(Z1, Z1.H(), Sys(Aσx, 2)))
+
+	tests := []struct {
+		s [][]complex64
+		m *Dense
+	}{
+		{
+			s: [][]complex64{
+				{0, 0, 0, -1i},
+				{0, 0, -1i, 0},
+				{0, 1i, 0, 0},
+				{1i, 0, 0, 0},
+			},
+			m: A𐌈(Aσy, Sys(Aσx, 2)),
+		},
+		// GHZ state generator.
+		{
+			s: [][]complex64{
+				{s, 0, 0, 0, s, 0, 0, 0},
+				{0, s, 0, 0, 0, s, 0, 0},
+				{0, 0, 0, s, 0, 0, 0, s},
+				{0, 0, s, 0, 0, 0, s, 0},
+				{0, 0, s, 0, 0, 0, -s, 0},
+				{0, 0, 0, s, 0, 0, 0, -s},
+				{0, s, 0, 0, 0, -s, 0, 0},
+				{s, 0, 0, 0, -s, 0, 0, 0},
+			},
+			m: Dot(SysReplace(SysReplace(cnot, 2, 3), 1, 2), cnot, h),
+		},
+	}
+	for i, test := range tests {
+		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+			m := FromMat(test.s).Transpose(test.m.Axis)
+			if err := m.Equal(test.m, 1e-6); err != nil {
+				t.Errorf("%+v", err)
 			}
 		})
 	}

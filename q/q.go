@@ -152,6 +152,27 @@ func (a *Dense) Transpose(axis []Axis) *Dense {
 	return &Dense{Axis: axis, D: a.D.Transpose(axisIndices...)}
 }
 
+func Trace(a *Dense, systems ...any) *Dense {
+	axes := make([]Axis, 0)
+	indices := make([][2]int, 0)
+	for _, ax := range a.Axis {
+		if i := slices.Index(systems, ax.System); i != -1 {
+			if ax.Braket == Ket {
+				s := systems[i]
+				bra := slices.Index(a.Axis, Axis{System: s, Braket: Bra})
+				ket := slices.Index(a.Axis, Axis{System: s, Braket: Ket})
+				indices = append(indices, [2]int{bra, ket})
+			}
+		} else {
+			axes = append(axes, ax)
+		}
+	}
+
+	b := tensor.Zeros(1)
+	tensor.Contract(b, a.D, indices)
+	return &Dense{Axis: axes, D: b}
+}
+
 func Product(c, a, b *Dense, axes [][2]Axis) *Dense {
 	var aRemoves, bRemoves []int
 	axesIndices := make([][2]int, 0, len(axes))
@@ -330,6 +351,31 @@ func ToMat(a *Dense) *Dense {
 	buf = buf.Reshape(n, n)
 
 	return &Dense{Axis: []Axis{{System: 0, Braket: Ket}, {System: 0, Braket: Bra}}, D: buf}
+}
+
+func FromMat(s [][]complex64) *Dense {
+	m := T2(s)
+
+	// Compute n, the number of particles.
+	n, exp2n := 0, m.D.Shape()[0]>>1
+	for exp2n != 0 {
+		n++
+		exp2n >>= 1
+	}
+
+	m.Axis = m.Axis[:0]
+	shape := make([]int, 0, n)
+	for i := 1; i <= n; i++ {
+		m.Axis = append(m.Axis, Axis{System: i, Braket: Ket})
+		shape = append(shape, 2)
+	}
+	for i := 1; i <= n; i++ {
+		m.Axis = append(m.Axis, Axis{System: i, Braket: Bra})
+		shape = append(shape, 2)
+	}
+	m.D = m.D.Reshape(shape...)
+
+	return m
 }
 
 func invPerm(p []int) []int {
