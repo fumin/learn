@@ -1311,7 +1311,7 @@ func bulletProofVerify(proof bulletProof, n int, cm bulletProofCommitment, basis
 	//
 	// verifyCommitmentsLog shows only that ctuq = <l,G> + <r,H> + <l,r>*Q
 	// while proof.tu itself may not be l*r, as an attacker can send
-	// 	proof.c = C + (<l,r> - 999)*Q
+	// 	proof.c = C + (-999)*Q
 	// 	proof.tu = <l,r> + 999
 	// so proof.c + proof.tu*Q = C + <l,r>*Q = <l,G> + <r,H> + <l,r>*Q,
 	// yet t(u) != <l(u), r(u)>.
